@@ -57,7 +57,7 @@ CREATE INDEX idx_payments_period ON payments(period);
 ```
 paybar                                  # launches TUI
 paybar add <name> <amount> --day <n> [--category <c>] [--currency <c>]
-paybar ls [--period YYYY-MM] [--pending | --paid | --all]
+paybar ls [--period YYYY-MM] [--pending | --paid | --all] [--archived]
 paybar pay <id> [--period YYYY-MM] [--amount <a>]
 paybar unpay <id> [--period YYYY-MM]
 paybar edit <id> [--name <n>] [--amount <a>] [--day <n>] [--category <c>|--no-category]
@@ -74,6 +74,10 @@ paybar status [--period YYYY-MM]
 - `add` prints the created row id and the resolved due date.
 - `ls` defaults to `--pending`. Columns: `id`, mark (`x` paid, `!` overdue,
   ` ` due), due date, name, category, amount.
+- `--pending`/`--paid`/`--all` choose which statuses to show; `--archived` is
+  an orthogonal flag that additionally includes retired expenses. Conflating
+  the two would make "everything" quietly mean "everything including things I
+  stopped paying".
 - `status` prints one line per currency: `<currency> <paid> / <total> · <n> pending, <m> overdue`.
 
 ### `--json`

@@ -19,7 +19,8 @@ Examples:
   paybar add Rent 90000 --day 5              a fixed charge due on the 5th
   paybar add Claude 20 --day 28 --currency usd --category work
   paybar ls                                  what is still pending this month
-  paybar ls --all                            everything, paid included
+  paybar ls --all                            paid and pending together
+  paybar ls --archived                       include expenses you retired
   paybar ls --period 2026-07                 look at another month
   paybar pay 1                               settle expense 1 for this month
   paybar pay 1 --amount 92500                record what was actually charged
@@ -62,9 +63,12 @@ enum Cmd {
         pending: bool,
         #[arg(long, conflicts_with = "all")]
         paid: bool,
-        /// Include paid and archived
+        /// Paid and pending together
         #[arg(long)]
         all: bool,
+        /// Also show archived expenses
+        #[arg(long)]
+        archived: bool,
         #[arg(long)]
         json: bool,
     },
@@ -144,12 +148,14 @@ fn main() -> Result<()> {
             let period = Period::of(today);
             println!("{}\t{}\t{} {}", id, period.day(day), currency.to_uppercase(), format_cents(cents));
         }
-        Cmd::Ls { period, pending, paid, all, json: as_json } => {
+        Cmd::Ls { period, pending, paid, all, archived, json: as_json } => {
             let period = resolve_period(period)?;
-            // Pending is the default because the useful question is "what do I
-            // still owe", not "what exists".
+            // Two orthogonal axes: which statuses to show, and whether
+            // archived expenses count. --all widens the first, --archived the
+            // second; conflating them made "everything" quietly mean
+            // "everything including things I retired".
             let view = View {
-                include_archived: all,
+                include_archived: archived,
                 only_pending: pending || !(paid || all),
                 only_paid: paid,
             };

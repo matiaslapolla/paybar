@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "id": "matiaslapolla.paybar",
+  "name": "paybar",
+  "version": "1.0.0",
+  "author": "Matias Lapolla",
+  "license": "MIT",
+  "description": "Fixed monthly expenses: what is still owed this month, and a popup to settle them.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "paybar",
+    "description": "Outstanding fixed expenses for the month, with a popup to mark them paid.",
+    "category": "Info",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 300,
+      "showAmount": true
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 30,
+        "max": 3600,
+        "step": 30,
+        "defaultValue": 300
+      },
+      {
+        "key": "showAmount",
+        "type": "boolean",
+        "label": "Show the outstanding amount, not just the count",
+        "defaultValue": true
+      }
+    ]
+  }
+}

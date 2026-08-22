@@ -1,87 +1,106 @@
 # paybar
 
-Fixed monthly expenses, two surfaces, one SQLite file. Sibling to
-[`tobar`](https://github.com/matiaslapolla/tobar).
+What falls due this month, and what is left to pay. Two surfaces over one
+SQLite file: a terminal UI, and a widget in the [Omarchy](https://omarchy.org)
+bar.
 
-- `core/` — Rust binary `paybar`: CLI verbs + Ratatui TUI (run `paybar` with no args).
-- `shell/` — Omarchy bar widget (Quickshell QML): what is still unpaid, with a popup to settle it.
-- `CONTEXT.md` — the domain model.
-- `CONTRACT.md` — the schema and command surface both surfaces conform to.
+![The paybar TUI](docs/images/tui.png)
 
-Not a budgeting app. It answers one question — *what falls due this month and
-what is left to pay* — and refuses the rest: no variable spending, no income,
-no bank import, no FX conversion.
+Not a budgeting app. It tracks the charges whose amount and due day you already
+know — rent, the gym, three subscriptions — and refuses the rest: no variable
+spending, no income, no bank import, no exchange rates.
 
-## Data
-
-Single SQLite file at `~/.local/share/paybar/expenses.db` (override with
-`PAYBAR_DB`), WAL mode. Open it from anywhere: `sqlite3 ~/.local/share/paybar/expenses.db`.
-
-## Build & install
+## Install
 
 ```sh
-# CLI + TUI
 cd core && cargo build --release && cp target/release/paybar ~/.local/bin/
-
-# Bar widget
-cd shell && ./install.sh
+cd ../shell && ./install.sh          # Omarchy bar widget, optional
 ```
 
-## CLI
+Everything lives in one SQLite file at `~/.local/share/paybar/expenses.db`
+(override with `PAYBAR_DB`). It is yours to open: `sqlite3 ~/.local/share/paybar/expenses.db`.
 
-```
-paybar                                  # TUI
-paybar add Rent 90000 --day 5 --category home
+## Use
+
+```sh
+paybar add Rent 450000 --day 5 --category home
 paybar add Claude 20 --day 28 --currency usd --category work
+paybar                               # the TUI above; space marks a row paid
+```
+
+That is the whole daily loop. The rest of the CLI is there for scripts and for
+the months you are not looking at:
+
+```
 paybar ls [--period YYYY-MM] [--pending|--paid|--all] [--archived]
 paybar pay <id> [--period YYYY-MM] [--amount <a>]
 paybar unpay <id> [--period YYYY-MM]
-paybar edit <id> [--name|--amount|--day|--category|--no-category|--currency|--archive|--restore]
+paybar edit <id> [--name|--amount|--day|--category|--currency|--archive|--restore]
 paybar rm <id>
 paybar status [--period YYYY-MM] [--json]
 ```
 
-### Example session
-
 ```sh
-$ paybar add Rent 90000 --day 5 --category home
-1	2026-08-05	ARS 90,000.00        # id, resolved due date, amount
-
-$ paybar add Claude 20 --day 28 --currency usd --category work
-2	2026-08-28	USD 20.00
-
-$ paybar ls                              # pending is the default
-1	!	2026-08-05	Rent	home	ARS 90,000.00
-2	 	2026-08-28	Claude	work	USD 20.00
-
-$ paybar pay 1
-1	2026-08	ARS 90,000.00
-
 $ paybar status
-ARS 90,000.00 / 90,000.00 · 0 pending, 0 overdue
-USD 0.00 / 20.00 · 1 pending, 0 overdue
-
-$ paybar ls --period 2026-07             # last month is untouched
-1	!	2026-07-05	Rent	home	ARS 90,000.00
+ARS 559,000.00 / 619,500.00 · 2 pending, 2 overdue
+USD 0.00 / 24.99 · 2 pending, 0 overdue
 ```
 
-Columns are `id`, mark (`x` paid, `!` overdue, ` ` due), due date, name,
-category, amount. `paybar --help` shows the same examples.
+### Four rules worth knowing
 
-Amounts use `.` as the decimal separator; `,` and `_` are ignored as digit
-grouping. More than two decimals is an error, not a rounding. Currency defaults
-to `$PAYBAR_CURRENCY`, itself defaulting to `ARS`; totals are grouped by
-currency and never converted between them.
+**A month is the unit.** Paid, overdue and due are not stored, they are worked
+out from the period you are looking at. The same expense reads overdue in July
+and due in August with nothing to migrate, and paying August never touches
+July.
 
-A due day past the end of a month is clamped, never rolled forward: `--day 31`
-falls on the 28th in February, so the charge stays in the month it belongs to.
+**A due day past the end of a month is clamped, never rolled forward.**
+`--day 31` falls on the 28th in February, so the charge stays in the month it
+belongs to.
+
+**Money is integer cents.** `.` is the decimal separator, `,` and `_` are
+ignored as digit grouping, and more than two decimals is an error rather than a
+silent rounding.
+
+**Currencies are grouped, never summed.** There is no exchange rate anywhere in
+this program, so ARS and USD are reported side by side and left that way.
 
 ### TUI keys
 
 `space`/`p` pay · `a` add · `e` edit · `t` archive · `x` delete · `h`/`l` month · `Tab` archived · `j`/`k` move · `q` quit
 
-The add and edit prompt takes one line: `<name> <amount> <day> [category]`. It
-is parsed from the end, so a name may contain spaces without any quoting.
+Add and edit take one line — `<name> <amount> <day> [category]` — parsed from
+the end, so a name may contain spaces without quoting.
 
-The TUI uses only ANSI indexed colors, so the terminal's palette is the
-palette: `omarchy theme set <name>` re-themes it with no code change.
+## Bar widget
+
+<p align="center">
+  <img src="docs/images/widget.png" width="420" alt="The paybar widget open in the Omarchy bar">
+</p>
+
+The bar shows what is still outstanding this month, or a check mark when
+nothing is. The popup settles a row with `space` and steps through months with
+`h`/`l`, the same keys as the TUI.
+
+It never opens the database: it shells out to `paybar --json`, so clamping,
+cents and currency grouping are decided in exactly one place. See
+[`docs/adr/001-qml-surfaces-call-the-cli.md`](docs/adr/001-qml-surfaces-call-the-cli.md).
+
+## Theming
+
+Neither surface hardcodes a color. The TUI uses only ANSI indexed colors, so
+the terminal palette is the palette; the widget uses the bar's own tokens.
+`omarchy theme set <name>` re-themes both with no code change — the two
+screenshots above are the same program under Tokyo Night and Solitude.
+
+## Layout
+
+| | |
+|---|---|
+| `core/` | Rust binary: CLI verbs and the Ratatui TUI |
+| `shell/` | Omarchy bar widget (Quickshell QML) |
+| `CONTEXT.md` | the domain model |
+| `CONTRACT.md` | the schema and command surface both surfaces conform to |
+| `docs/` | specs, plans, decision records |
+
+Sibling to [`tobar`](https://github.com/matiaslapolla/tobar), which does the
+same thing for todos.

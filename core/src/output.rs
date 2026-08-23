@@ -21,21 +21,6 @@ pub fn print_entries(entries: &[Entry]) {
     }
 }
 
-/// What a total is worth in the primary currency, or `None` when there is
-/// nothing to say: no rate, the primary currency itself, or a pair the rate
-/// does not describe.
-fn approx_cents(t: &Total, primary: Option<&str>, rate: Option<&Rate>) -> Option<i64> {
-    let (primary, rate) = (primary?, rate?);
-    fx::convert_cents(t.due_cents, &t.currency, primary, rate.rate_centavos)
-}
-
-/// The line that sits under a total: what it is worth, at which rate, and how
-/// old that rate is when it has stopped being current. A converted number
-/// nobody can attribute is worse than no converted number.
-fn annotation(approx_cents: i64, primary: &str, rate: &Rate, now: NaiveDateTime) -> String {
-    format!("    ≈ {} {} {}", primary, format_cents(approx_cents), rate.label(now))
-}
-
 /// One line per currency. Nothing at all still prints a line, because "you owe
 /// nothing this month" is an answer and a blank screen is not.
 pub fn print_status(entries: &[Entry], period: Period, rate: Option<&Rate>, now: NaiveDateTime) {
@@ -59,10 +44,12 @@ pub fn print_status(entries: &[Entry], period: Period, rate: Option<&Rate>, now:
             pending,
             overdue
         );
+        // Indented under the total it belongs to, and subordinate to it: the
+        // two figures above are exact, this one is derived and dated.
         if let (Some(approx), Some(primary), Some(rate)) =
-            (approx_cents(t, primary.as_deref(), rate), primary.as_deref(), rate)
+            (fx::approx_for(rate, t, primary.as_deref()), primary.as_deref(), rate)
         {
-            println!("{}", annotation(approx, primary, rate, now));
+            println!("    {}", rate.annotation(approx, primary, now));
         }
     }
 }
@@ -111,8 +98,9 @@ fn total_json(t: &Total, approx: Option<i64>) -> String {
 }
 
 /// The rate itself travels alongside the converted figures, so a surface can
-/// show what it was without recomputing anything.
-fn fx_json(rate: &Rate) -> String {
+/// show what it was without recomputing anything. `stale` is derived here
+/// rather than read off the rate, for the same reason an expense's status is.
+fn fx_json(rate: &Rate, now: NaiveDateTime) -> String {
     format!(
         "{{\"casa\":{},\"base\":{},\"quote\":{},\"rateCentavos\":{},\"fetchedAt\":{},\
          \"sourceUpdatedAt\":{},\"stale\":{}}}",
@@ -122,7 +110,7 @@ fn fx_json(rate: &Rate) -> String {
         rate.rate_centavos,
         json_string(&rate.fetched_at),
         json_opt_string(rate.source_updated_at.as_deref()),
-        rate.stale
+        !rate.is_current(now)
     )
 }
 
@@ -148,6 +136,7 @@ pub fn json(
     entries: &[Entry],
     period: Period,
     today: NaiveDate,
+    now: NaiveDateTime,
     with_items: bool,
     rate: Option<&Rate>,
 ) -> String {
@@ -157,14 +146,14 @@ pub fn json(
     let overdue = entries.iter().filter(|e| e.status == Status::Overdue).count();
     let totals_json = totals
         .iter()
-        .map(|t| total_json(t, approx_cents(t, primary.as_deref(), rate)))
+        .map(|t| total_json(t, fx::approx_for(rate, t, primary.as_deref())))
         .collect::<Vec<_>>()
         .join(",");
     let mut out = format!(
         "{{\"period\":\"{period}\",\"today\":\"{today}\",\"pending\":{pending},\
          \"overdue\":{overdue},\"primaryCurrency\":{},\"fx\":{},\"totals\":[{totals_json}]",
         json_opt_string(primary.as_deref()),
-        rate.map(fx_json).unwrap_or_else(|| "null".to_string())
+        rate.map(|r| fx_json(r, now)).unwrap_or_else(|| "null".to_string())
     );
     if with_items {
         let items = entries.iter().map(entry_json).collect::<Vec<_>>().join(",");
@@ -217,7 +206,7 @@ mod tests {
             rate_centavos: 155_000,
             fetched_at: "2026-08-23T18:00:00".into(),
             source_updated_at: Some("2026-08-23T21:00:00.000Z".into()),
-            stale: false,
+            ttl_secs: 3600,
         }
     }
 
@@ -227,6 +216,11 @@ mod tests {
 
     fn now() -> NaiveDateTime {
         NaiveDateTime::parse_from_str("2026-08-23T18:04:00", DATE_FMT).unwrap()
+    }
+
+    /// Past the rate's one-hour TTL.
+    fn much_later() -> NaiveDateTime {
+        NaiveDateTime::parse_from_str("2026-08-23T21:00:00", DATE_FMT).unwrap()
     }
 
     #[test]
@@ -241,7 +235,7 @@ mod tests {
 
     #[test]
     fn status_json_omits_items_and_keeps_every_other_key() {
-        let out = json(&[entry()], Period::parse("2026-08").unwrap(), today(), false, None);
+        let out = json(&[entry()], Period::parse("2026-08").unwrap(), today(), now(), false, None);
         assert_eq!(
             out,
             "{\"period\":\"2026-08\",\"today\":\"2026-08-22\",\"pending\":0,\"overdue\":0,\
@@ -253,7 +247,7 @@ mod tests {
     /// An empty database is an answer, not a special case: same keys, zeroes.
     #[test]
     fn an_empty_period_still_produces_every_key() {
-        let out = json(&[], Period::parse("2026-08").unwrap(), today(), true, None);
+        let out = json(&[], Period::parse("2026-08").unwrap(), today(), now(), true, None);
         assert_eq!(
             out,
             "{\"period\":\"2026-08\",\"today\":\"2026-08-22\",\"pending\":0,\"overdue\":0,\
@@ -283,7 +277,7 @@ mod tests {
     #[test]
     fn fx_json_carries_the_rate_that_produced_the_conversion() {
         assert_eq!(
-            fx_json(&rate()),
+            fx_json(&rate(), now()),
             "{\"casa\":\"blue\",\"base\":\"USD\",\"quote\":\"ARS\",\"rateCentavos\":155000,\
              \"fetchedAt\":\"2026-08-23T18:00:00\",\
              \"sourceUpdatedAt\":\"2026-08-23T21:00:00.000Z\",\"stale\":false}"
@@ -295,7 +289,7 @@ mod tests {
     #[test]
     fn only_the_non_primary_total_gets_an_approximation() {
         let entries = [entry(), usd_entry()];
-        let out = json(&entries, Period::parse("2026-08").unwrap(), today(), false, Some(&rate()));
+        let out = json(&entries, Period::parse("2026-08").unwrap(), today(), now(), false, Some(&rate()));
         assert!(out.contains(
             "{\"currency\":\"ARS\",\"dueCents\":9000000,\"paidCents\":9000000,\"approxCents\":null}"
         ));
@@ -307,34 +301,21 @@ mod tests {
     #[test]
     fn without_a_rate_every_approximation_is_null() {
         let entries = [entry(), usd_entry()];
-        let out = json(&entries, Period::parse("2026-08").unwrap(), today(), false, None);
+        let out = json(&entries, Period::parse("2026-08").unwrap(), today(), now(), false, None);
         assert!(out.contains("\"fx\":null"));
         assert_eq!(out.matches("\"approxCents\":null").count(), 2);
     }
 
+    /// A rate held past its TTL is still worth showing, but only with its age
+    /// attached — and `stale` in the payload has to agree with the text.
     #[test]
-    fn an_annotation_names_its_casa_and_rate() {
-        assert_eq!(
-            annotation(176_700_000, "ARS", &rate(), now()),
-            "    ≈ ARS 1,767,000.00 @ blue 1,550.00"
+    fn an_aged_rate_says_so_in_both_the_text_and_the_json() {
+        let entries = [entry(), usd_entry()];
+        let period = Period::parse("2026-08").unwrap();
+        assert!(json(&entries, period, today(), now(), false, Some(&rate())).contains("\"stale\":false"));
+        assert!(
+            json(&entries, period, today(), much_later(), false, Some(&rate()))
+                .contains("\"stale\":true")
         );
-    }
-
-    /// A rate that could not be refreshed is still worth showing, but only with
-    /// its age attached.
-    #[test]
-    fn a_stale_annotation_admits_how_old_it_is() {
-        let mut r = rate();
-        r.stale = true;
-        assert_eq!(
-            annotation(176_700_000, "ARS", &r, now()),
-            "    ≈ ARS 1,767,000.00 @ blue 1,550.00 (4m old)"
-        );
-    }
-
-    #[test]
-    fn a_pair_the_rate_does_not_describe_is_left_alone() {
-        let t = Total { currency: "EUR".into(), due_cents: 1000, paid_cents: 0 };
-        assert_eq!(approx_cents(&t, Some("ARS"), Some(&rate())), None);
     }
 }

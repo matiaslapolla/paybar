@@ -8,31 +8,40 @@ use crate::db::{DATE_FMT, Entry, Total, now_string, primary_currency, totals};
 
 /// A rate relates exactly one pair, in one direction, read from one place.
 /// Everything else in paybar stays currency-agnostic.
-pub const BASE: &str = "USD";
-pub const QUOTE: &str = "ARS";
+const BASE: &str = "USD";
+const QUOTE: &str = "ARS";
 
 /// dolarapi publishes the dollar in seven places at once. Which one is a
 /// judgement call, so it is the user's; an unknown name is an error rather
 /// than a silent fallback to a number they did not choose.
-pub const CASAS: [&str; 7] =
+const CASAS: [&str; 7] =
     ["oficial", "blue", "bolsa", "contadoconliqui", "cripto", "mayorista", "tarjeta"];
 
 const DEFAULT_CASA: &str = "blue";
 const DEFAULT_TTL_SECS: i64 = 3600;
 const TIMEOUT: Duration = Duration::from_millis(2500);
 
-pub struct Config {
-    pub enabled: bool,
-    pub casa: String,
-    pub ttl_secs: i64,
+struct Config {
+    enabled: bool,
+    casa: String,
+    ttl_secs: i64,
 }
 
 impl Config {
-    pub fn from_env() -> Result<Config> {
+    fn from_env() -> Result<Config> {
         let enabled = match std::env::var("PAYBAR_FX") {
             Ok(v) => !matches!(v.trim().to_lowercase().as_str(), "off" | "0" | "false" | "no"),
             Err(_) => true,
         };
+        if !enabled {
+            // Nothing downstream will read the casa or the TTL, so nothing
+            // downstream should be able to reject them either.
+            return Ok(Config {
+                enabled,
+                casa: DEFAULT_CASA.to_string(),
+                ttl_secs: DEFAULT_TTL_SECS,
+            });
+        }
         let casa = match std::env::var("PAYBAR_FX_CASA") {
             Ok(v) if !v.trim().is_empty() => v.trim().to_lowercase(),
             _ => DEFAULT_CASA.to_string(),
@@ -64,12 +73,20 @@ pub struct Rate {
     pub fetched_at: String,
     /// When the source says it last moved. Passed through, never parsed.
     pub source_updated_at: Option<String>,
-    /// The last refresh failed and this is the previous answer.
-    pub stale: bool,
+    /// How long this rate was meant to stay fresh. Carried along so every
+    /// surface derives staleness the same way rather than trusting a flag set
+    /// at fetch time — a rate held on screen for hours goes stale where it
+    /// sits, and a stored boolean would not notice.
+    pub ttl_secs: i64,
 }
 
 impl Rate {
-    pub fn age_secs(&self, now: NaiveDateTime) -> i64 {
+    /// Still within the TTL it was fetched under. Derived, never stored.
+    pub fn is_current(&self, now: NaiveDateTime) -> bool {
+        self.age_secs(now) < self.ttl_secs
+    }
+
+    fn age_secs(&self, now: NaiveDateTime) -> i64 {
         match NaiveDateTime::parse_from_str(&self.fetched_at, DATE_FMT) {
             Ok(t) => (now - t).num_seconds().max(0),
             Err(_) => i64::MAX,
@@ -80,13 +97,28 @@ impl Rate {
     /// A converted number nobody can attribute is worse than none at all, so
     /// every surface that renders a conversion renders this next to it.
     pub fn label(&self, now: NaiveDateTime) -> String {
-        let age =
-            if self.stale { format!(" ({} old)", self.age_label(now)) } else { String::new() };
+        let age = if self.is_current(now) {
+            String::new()
+        } else {
+            format!(" ({} old)", self.age_label(now))
+        };
         format!("@ {} {}{}", self.casa, crate::money::format_cents(self.rate_centavos), age)
     }
 
+    /// The whole annotation bar the indentation each surface picks for itself.
+    /// One implementation, so the attribution cannot drift between the CLI and
+    /// the TUI the way it would if each formatted its own.
+    pub fn annotation(&self, approx_cents: i64, primary: &str, now: NaiveDateTime) -> String {
+        format!(
+            "\u{2248} {} {} due {}",
+            primary,
+            crate::money::format_cents(approx_cents),
+            self.label(now)
+        )
+    }
+
     /// "4m", "3h", "2d" — enough to judge whether to trust it, no more.
-    pub fn age_label(&self, now: NaiveDateTime) -> String {
+    fn age_label(&self, now: NaiveDateTime) -> String {
         let secs = self.age_secs(now);
         if secs >= 86_400 {
             format!("{}d", secs / 86_400)
@@ -111,19 +143,15 @@ pub fn convert_cents(amount_cents: i64, from: &str, to: &str, rate_centavos: i64
     }
     let n = amount_cents as i128;
     let rate = rate_centavos as i128;
-    let scaled = match (from, to) {
-        (BASE, QUOTE) => n * rate,
-        (QUOTE, BASE) => {
-            // (n / rate) * 100, kept in one expression so the division rounds once.
-            n * 100 * 100
-        }
+    // Both directions as one numerator/denominator pair, so the rounding
+    // happens once and an unrelated pair cannot fall through to a wildcard
+    // that silently assumes the other direction's divisor.
+    let (numerator, denominator) = match (from, to) {
+        (BASE, QUOTE) => (n * rate, 100),
+        (QUOTE, BASE) => (n * 10_000, rate * 100),
         _ => return None,
     };
-    let divisor: i128 = match (from, to) {
-        (BASE, QUOTE) => 100,
-        _ => rate * 100,
-    };
-    Some(div_round_half_up(scaled, divisor) as i64)
+    Some(div_round_half_up(numerator, denominator) as i64)
 }
 
 fn div_round_half_up(n: i128, d: i128) -> i128 {
@@ -132,10 +160,10 @@ fn div_round_half_up(n: i128, d: i128) -> i128 {
     sign * ((n + d / 2) / d)
 }
 
-/// The rate a period needs, or `None` when it needs none: a month in a single
-/// currency, or one whose currencies this rate does not relate, never touches
-/// the network.
-pub fn needed_for(totals: &[Total], primary: Option<&str>) -> bool {
+/// Whether a period has two currencies this rate can relate. A month in a
+/// single currency, or one holding a currency outside the pair, never touches
+/// the network to discover it has nothing to convert.
+fn needed_for(totals: &[Total], primary: Option<&str>) -> bool {
     let Some(primary) = primary else { return false };
     let other = match primary {
         QUOTE => BASE,
@@ -145,29 +173,41 @@ pub fn needed_for(totals: &[Total], primary: Option<&str>) -> bool {
     totals.iter().any(|t| t.currency == other)
 }
 
+/// What a total is worth in the primary currency, or `None` when there is
+/// nothing to say: no rate, the primary currency itself, or a pair this rate
+/// does not describe.
+///
+/// Only the *due* total converts. What was actually paid was paid at whatever
+/// rate applied that day, and restating it at today's is not an approximation
+/// but a wrong number.
+pub fn approx_for(rate: Option<&Rate>, total: &Total, primary: Option<&str>) -> Option<i64> {
+    let (primary, rate) = (primary?, rate?);
+    convert_cents(total.due_cents, &total.currency, primary, rate.rate_centavos)
+}
+
 // ---- cache ------------------------------------------------------------------
 
-pub fn cached(conn: &Connection, casa: &str) -> Result<Option<Rate>> {
+fn cached(conn: &Connection, cfg: &Config) -> Result<Option<Rate>> {
     let row = conn
         .query_row(
             "SELECT rate_centavos, fetched_at, source_updated_at FROM fx_rates
              WHERE casa = ?1 AND base = ?2 AND quote = ?3",
-            params![casa, BASE, QUOTE],
+            params![cfg.casa, BASE, QUOTE],
             |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?)),
         )
         .optional()?;
     Ok(row.map(|(rate_centavos, fetched_at, source_updated_at)| Rate {
-        casa: casa.to_string(),
+        casa: cfg.casa.clone(),
         base: BASE.to_string(),
         quote: QUOTE.to_string(),
         rate_centavos,
         fetched_at,
         source_updated_at,
-        stale: false,
+        ttl_secs: cfg.ttl_secs,
     }))
 }
 
-pub fn store(conn: &Connection, rate: &Rate) -> Result<()> {
+fn store(conn: &Connection, rate: &Rate) -> Result<()> {
     conn.execute(
         "INSERT INTO fx_rates (casa, base, quote, rate_centavos, fetched_at, source_updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -248,17 +288,13 @@ fn fetch(casa: &str) -> Result<(i64, Option<String>)> {
 /// Never fails and never blocks a command: a fetch that fails falls back to the
 /// cache marked stale, and an empty cache falls back to no annotation at all.
 /// A missing exchange rate is not an error in a program about fixed expenses.
-pub fn resolve(conn: &Connection, cfg: &Config, force: bool) -> Option<Rate> {
+fn resolve(conn: &Connection, cfg: &Config, force: bool) -> Option<Rate> {
     if !cfg.enabled {
         return None;
     }
-    let cached = cached(conn, &cfg.casa).ok().flatten();
+    let cached = cached(conn, cfg).ok().flatten();
     let now = Local::now().naive_local();
-    let fresh_enough = match &cached {
-        Some(r) => r.age_secs(now) < cfg.ttl_secs,
-        None => false,
-    };
-    if fresh_enough && !force {
+    if !force && cached.as_ref().is_some_and(|r| r.is_current(now)) {
         return cached;
     }
     match fetch(&cfg.casa) {
@@ -270,15 +306,14 @@ pub fn resolve(conn: &Connection, cfg: &Config, force: bool) -> Option<Rate> {
                 rate_centavos,
                 fetched_at: now_string(),
                 source_updated_at,
-                stale: false,
+                ttl_secs: cfg.ttl_secs,
             };
             let _ = store(conn, &rate);
             Some(rate)
         }
-        Err(_) => cached.map(|mut r| {
-            r.stale = true;
-            r
-        }),
+        // The previous answer, which `is_current` will already report as stale:
+        // reaching this arm means the cache had aged past its TTL.
+        Err(_) => cached,
     }
 }
 
@@ -311,8 +346,12 @@ mod tests {
             rate_centavos: 155_000,
             fetched_at: "2026-08-23T18:00:00".into(),
             source_updated_at: Some("2026-08-23T21:00:00.000Z".into()),
-            stale: false,
+            ttl_secs: 3600,
         }
+    }
+
+    fn at(s: &str) -> NaiveDateTime {
+        NaiveDateTime::parse_from_str(s, DATE_FMT).unwrap()
     }
 
     fn total(currency: &str) -> Total {
@@ -334,6 +373,7 @@ mod tests {
     fn a_rate_with_centavos_survives_the_round_trip() {
         // bolsa at 1545.30
         assert_eq!(convert_cents(100, BASE, QUOTE, 154_530), Some(154_530));
+        assert_eq!(convert_cents(154_530, QUOTE, BASE, 154_530), Some(100));
     }
 
     #[test]
@@ -394,13 +434,55 @@ mod tests {
         assert!(parse_body(r#"{"venta":0}"#).is_err());
     }
 
+    /// Staleness is derived from age, not remembered from the fetch: a rate
+    /// left on screen goes stale where it sits, and a stored flag would not
+    /// notice.
     #[test]
-    fn a_label_names_the_casa_and_only_admits_an_age_when_stale() {
-        let now = NaiveDateTime::parse_from_str("2026-08-23T21:00:00", DATE_FMT).unwrap();
-        assert_eq!(rate().label(now), "@ blue 1,550.00");
-        let mut r = rate();
-        r.stale = true;
-        assert_eq!(r.label(now), "@ blue 1,550.00 (3h old)");
+    fn a_label_admits_an_age_only_once_the_ttl_has_passed() {
+        assert_eq!(rate().label(at("2026-08-23T18:30:00")), "@ blue 1,550.00");
+        assert_eq!(rate().label(at("2026-08-23T21:00:00")), "@ blue 1,550.00 (3h old)");
+        assert!(rate().is_current(at("2026-08-23T18:59:00")));
+        assert!(!rate().is_current(at("2026-08-23T19:01:00")));
+    }
+
+    #[test]
+    fn an_annotation_carries_the_figure_and_its_attribution() {
+        assert_eq!(
+            rate().annotation(176_700_000, "ARS", at("2026-08-23T18:30:00")),
+            "\u{2248} ARS 1,767,000.00 due @ blue 1,550.00"
+        );
+    }
+
+    /// Only the due total converts. Restating what was already paid at today's
+    /// rate would not be an approximation, it would be a wrong number.
+    #[test]
+    fn approx_for_converts_the_due_total_and_leaves_the_primary_alone() {
+        let usd = Total { currency: "USD".into(), due_cents: 114_000, paid_cents: 114_000 };
+        let ars = Total { currency: "ARS".into(), due_cents: 9_000_000, paid_cents: 0 };
+        assert_eq!(approx_for(Some(&rate()), &usd, Some("ARS")), Some(176_700_000));
+        assert_eq!(approx_for(Some(&rate()), &ars, Some("ARS")), None);
+        assert_eq!(approx_for(None, &usd, Some("ARS")), None);
+        assert_eq!(approx_for(Some(&rate()), &usd, None), None);
+    }
+
+    /// `off` means off: nothing downstream reads the casa, so nothing
+    /// downstream may reject it either.
+    #[test]
+    fn disabling_conversion_stops_the_casa_being_validated() {
+        unsafe {
+            std::env::set_var("PAYBAR_FX", "off");
+            std::env::set_var("PAYBAR_FX_CASA", "garbage");
+        }
+        let cfg = Config::from_env().unwrap();
+        assert!(!cfg.enabled);
+        unsafe {
+            std::env::set_var("PAYBAR_FX", "on");
+        }
+        assert!(Config::from_env().is_err());
+        unsafe {
+            std::env::remove_var("PAYBAR_FX");
+            std::env::remove_var("PAYBAR_FX_CASA");
+        }
     }
 
     #[test]

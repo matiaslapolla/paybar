@@ -66,16 +66,27 @@ database learns about currencies.
 needs one and the cached copy is older than the TTL. It is needed only when a
 period actually holds more than one currency — an all-ARS month never touches
 the network. This is what makes "it updates when I open the widget" true
-without a daemon: the widget refreshes on popup open, the TUI on launch, and
-each refresh runs a command that fetches iff the cache went stale.
+without a separate schedule: every read the surfaces already do carries the
+refresh with it. The widget re-reads on popup open and on its own 300 s poll;
+the TUI resolves at launch, on `r`, and once on stepping into a month that
+turns out to need a rate.
 
 **The network is never load-bearing.** One 2.5 s global timeout covers
 connect, send and receive together, so the worst case is bounded whatever
-stalls. On
-any failure — offline, DNS, 500, garbage body — the cached rate is used and
-marked `stale`. With no cached rate at all, the annotation is simply absent.
+stalls. On any failure — offline, DNS, 500, garbage body — the cached rate is
+served instead. With no cached rate at all, the annotation is simply absent.
 A failed fetch never changes an exit code: `status --json` exits 0 with
 `"fx": null` exactly as it exits 0 with an empty `items`.
+
+**Staleness is derived, never stored.** A rate carries the TTL it was fetched
+under, and every surface asks whether its age has passed it — the same rule
+this codebase already applies to an expense's status. A flag set at fetch time
+would say "fresh" about a rate that has been sitting on a TUI header for six
+hours.
+
+**`off` means off.** `PAYBAR_FX=off` short-circuits before the casa and TTL are
+validated. A setting nothing downstream will read must not be able to fail a
+command.
 
 **Conversion is integer arithmetic** in `i128`, from cents to cents, half-up.
 The rate itself is stored as centavos per unit (blue 1550.00 → `155000`), so a
@@ -90,21 +101,24 @@ annotation; there is nothing to say.
 ### `status`
 
 ```
-ARS 585,196.00 / 585,196.00 · 0 pending, 0 overdue
-USD   1,140.00 /   1,140.00 · 0 pending, 0 overdue
-    ≈ ARS 1,767,000.00 @ blue 1,550.00
+ARS 0.00 / 585,196.00 · 5 pending, 4 overdue
+USD 0.00 / 1,140.00 · 4 pending, 2 overdue
+    ≈ ARS 1,767,000.00 due @ blue 1,550.00
 ```
 
 The annotation is its own line, indented, and attached to the total above it.
-A stale rate appends its age: `@ blue 1,550.00 (3h old)`.
+It says `due` because the line above carries two figures and only one of them
+converts. A rate past its TTL appends its age: `@ blue 1,550.00 (3h old)`.
 
 ### `ls --json` / `status --json`
 
 Two additions, both field-stable:
 
 - a top-level `fx` object, `null` when disabled, unavailable, or unnecessary;
-- `approxCents` on each entry of `totals`, `null` for the primary currency and
-  whenever `fx` is `null`.
+- `approxCents` on each entry of `totals` — `dueCents` converted — `null` for
+  the primary currency and whenever `fx` is `null`. `paidCents` gets no
+  counterpart: it was paid at a past rate, and restating it at today's would be
+  wrong rather than approximate.
 
 ```json
 "fx": {
@@ -124,10 +138,15 @@ a rule, and rules live in one place.
 
 ### TUI
 
-The header keeps one line per currency and appends `≈ ARS … @ casa rate` to
-non-primary ones. `r` forces a refresh that bypasses the TTL — the one key
-added, and the only place the TUI fetches other than launch, because a fetch
-blocks and the event loop must not.
+The header is one line, so the annotation is a span rather than a line of its
+own: it follows the total it converts, one step fainter than the totals
+themselves, which is what carries "derived and approximate" where an indent
+cannot.
+
+`r` forces a refresh that bypasses the TTL — the one key added. The TUI also
+resolves once on stepping into a month that turns out to need a rate, and
+gives up until `r` if that fails, so an offline session cannot stall on every
+keypress. It never fetches on the idle tick.
 
 ### Widget
 
@@ -137,6 +156,10 @@ totals block, dim, right-aligned. Age is rendered as `(stale)` rather than a
 duration: the plugin does not parse timestamps, and the distinction that
 matters at a glance is current versus not. A stale rate is not an error state —
 the bar never blanks over FX.
+
+The widget's existing 300 s poll refreshes the rate too, since the rate rides
+the reads rather than having a schedule of its own. Popup-open is what makes it
+feel immediate; the poll is what keeps the bar honest between openings.
 
 ## Out of scope, deliberately
 

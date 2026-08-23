@@ -30,13 +30,15 @@ against.
 
 The grouping invariant stays. It is not weakened, flagged, or made optional.
 
-A rate is rendered as an **annotation**: a second, visually subordinate line
-attached to a non-primary total, always carrying its casa and its value, and
-its age when stale.
+A rate is rendered as an **annotation**: a visually subordinate figure attached
+to a non-primary total, always carrying its casa and its value, and its age
+once past its TTL. Where a surface has the room it is a separate indented line;
+where it does not — the single-line TUI header — it is a fainter span following
+the total. Subordination is the requirement; a line is one way to get it.
 
 ```
-USD 1,140.00 / 1,140.00 · 0 pending, 0 overdue
-                          ≈ ARS 1,767,000.00 @ blue 1,550.00
+USD 0.00 / 1,140.00 · 4 pending, 2 overdue
+    ≈ ARS 1,767,000.00 due @ blue 1,550.00
 ```
 
 Concretely:
@@ -47,15 +49,18 @@ Concretely:
   persisted is the rate itself, in its own table, as a cache.
 - Every rendered conversion names its casa and its rate. A number the user
   cannot attribute is not shown.
+- Only the *due* total converts. What was already paid was paid at some past
+  rate; restating it at today's would be a wrong number, not an approximate
+  one.
 - One casa, globally configured. Per-expense rates are Spec 002's explicit
   non-goal.
 
 ## Consequences
 
 **Good.** The question "how much is this month" gets an answer, and the answer
-is auditable at a glance — casa, rate, staleness. The `≈` and the indentation
-make the epistemic status visible: this is derived, approximate, and dated,
-unlike the two totals above it which are exact.
+is auditable at a glance — casa, rate, staleness. The `≈` and the subordinate
+rendering make the epistemic status visible: this is derived, approximate, and
+dated, unlike the totals beside it which are exact.
 
 **Good.** Because nothing converted is stored, deleting `fx_rates` or setting
 `PAYBAR_FX=off` returns the program to its previous behaviour byte for byte.

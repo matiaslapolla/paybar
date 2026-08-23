@@ -157,8 +157,10 @@ function rateLabel(fx) {
 
 /// What one total is worth in the primary currency, or "" when there is
 /// nothing to say. Never a blended figure: this annotates a single total, and
-/// the totals themselves stay grouped.
+/// the totals themselves stay grouped. The figure is the *due* total — what
+/// was already paid was paid at some past rate, and restating it at today's
+/// would be a wrong number rather than an approximate one.
 function approxLabel(total, fx, primaryCurrency) {
   if (!fx || !total || total.approxCents === null || total.approxCents === undefined) return ""
-  return "\u2248 " + primaryCurrency + " " + formatCents(total.approxCents) + " " + rateLabel(fx)
+  return "\u2248 " + primaryCurrency + " " + formatCents(total.approxCents) + " due " + rateLabel(fx)
 }

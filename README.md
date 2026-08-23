@@ -65,20 +65,23 @@ silent rounding.
 side and left that way. A rate may *annotate* a total — never merge two:
 
 ```
-ARS 585,196.00 / 585,196.00 · 0 pending, 0 overdue
-USD   1,140.00 /   1,140.00 · 0 pending, 0 overdue
-    ≈ ARS 1,767,000.00 @ blue 1,550.00
+ARS 0.00 / 585,196.00 · 5 pending, 4 overdue
+USD 0.00 / 1,140.00 · 4 pending, 2 overdue
+    ≈ ARS 1,767,000.00 due @ blue 1,550.00
 ```
 
 The `≈` line is derived, approximate and dated, and says so: it always carries
-the casa and the rate, and admits its age once stale. The two lines above it
-stay exact. Nothing converted is ever written to the database.
+the casa and the rate, and admits its age once past the TTL. Only the *due*
+total converts — what you already paid was paid at some past rate, and
+restating it at today's would be wrong rather than approximate. The two lines
+above it stay exact, and nothing converted is ever written to the database.
 
 The rate comes from [dolarapi](https://dolarapi.com) — public and keyless —
-and refreshes lazily, when a surface asks for a month that holds both
-currencies and the cached rate has expired. Opening the TUI or the bar popup
-is what updates it; an all-ARS month never touches the network, and a failed
-fetch falls back to the last known rate rather than failing the command.
+and refreshes lazily: it rides the reads the surfaces already do rather than
+having a schedule of its own. Opening the TUI or the bar popup is what makes
+it feel immediate; the widget's own poll keeps it honest in between. An
+all-ARS month never touches the network, and a failed fetch falls back to the
+last known rate rather than failing the command.
 
 | | | |
 |---|---|---|

@@ -90,8 +90,9 @@ paybar status [--period YYYY-MM]
 - Conversion is configured by environment only: `PAYBAR_FX` (`off` disables),
   `PAYBAR_FX_CASA` (one of `oficial`, `blue`, `bolsa`, `contadoconliqui`,
   `cripto`, `mayorista`, `tarjeta`; default `blue`), `PAYBAR_FX_TTL` (seconds a
-  fetched rate stays fresh; default 3600). An unknown casa is an error; a
-  fetch that fails is not.
+  fetched rate stays fresh; default 3600). An unknown casa is an error in any
+  command that resolves a rate; a fetch that fails is not. `PAYBAR_FX=off`
+  validates neither casa nor TTL, because nothing downstream will read them.
 - `--period` defaults to the current period everywhere.
 - `add` prints the created row id and the resolved due date.
 - `ls` defaults to `--pending`. Columns: `id`, mark (`x` paid, `!` overdue,
@@ -144,10 +145,16 @@ This is the only interface the QML plugin uses.
 
 - `status --json` omits `items`; `ls --json` includes them.
 - `fx` is `null` — never absent — when conversion is disabled, when no rate is
-  available, and when the period does not need one. `approxCents` is the
-  total converted to `primaryCurrency`, and is `null` for the primary currency
-  itself and whenever `fx` is `null`. Surfaces render it; they never compute
-  it, so rounding has one implementation.
+  available, and when the period does not need one. `approxCents` is
+  `dueCents` converted to `primaryCurrency`, and is `null` for the primary
+  currency itself and whenever `fx` is `null`. Surfaces render it; they never
+  compute it, so rounding has one implementation.
+- `paidCents` has no converted counterpart, deliberately. It was paid at
+  whatever rate applied that day; restating it at today's would not be an
+  approximation but a wrong number.
+- `stale` is derived at emit time from the rate's age against the TTL, not
+  remembered from the fetch — the same rule as an expense's status. A rate held
+  on screen goes stale where it sits.
 - `status` is field-stable: keys are always present, even at zero.
 - Exit code is 0 with an empty `items` array when nothing matches; a non-zero
   exit means the command failed, never "nothing to show".
@@ -159,9 +166,13 @@ This is the only interface the QML plugin uses.
   open, and after any mutation it triggers itself.
 - The TUI re-queries on every user action.
 - A rate refreshes as a side effect of those reads: a command that needs one
-  fetches iff the cached copy aged past `PAYBAR_FX_TTL`. There is no daemon and
-  no separate schedule. The TUI resolves at launch and on `r`, never inside its
-  event loop, because a fetch blocks and a redraw must not.
+  fetches iff the cached copy aged past `PAYBAR_FX_TTL`. There is no separate
+  schedule for it — it rides the refreshes above, so the widget's own poll and
+  popup-open both carry it.
+- The TUI resolves at launch, on `r`, and once when stepping into a month that
+  turns out to need a rate — never on its idle tick, because a fetch blocks and
+  a redraw must not. A failed attempt is not retried until `r`, so an offline
+  session cannot stall on every keypress.
 - A fetch never changes an exit code. On failure the cached rate is served with
   `"stale": true`; with no cached rate, `fx` is `null`. Non-zero still means
   the command failed, never "no rate".

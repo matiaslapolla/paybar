@@ -139,6 +139,7 @@ fn main() -> Result<()> {
     };
     let mut conn = db::open()?;
     let today = Local::now().date_naive();
+    let now = Local::now().naive_local();
 
     match cmd {
         Cmd::Add { name, amount, day, category, currency } => {
@@ -169,7 +170,7 @@ fn main() -> Result<()> {
             let entries = db::period_view(&conn, period, today, &view)?;
             if as_json {
                 let rate = fx::for_entries(&conn, &entries, false)?;
-                println!("{}", json(&entries, period, today, true, rate.as_ref()));
+                println!("{}", json(&entries, period, today, now, true, rate.as_ref()));
             } else {
                 // The table has no totals line, so there is nothing to annotate
                 // and no reason to reach for the network.
@@ -229,9 +230,9 @@ fn main() -> Result<()> {
             let entries = db::period_view(&conn, period, today, &View::all())?;
             let rate = fx::for_entries(&conn, &entries, false)?;
             if as_json {
-                println!("{}", json(&entries, period, today, false, rate.as_ref()));
+                println!("{}", json(&entries, period, today, now, false, rate.as_ref()));
             } else {
-                print_status(&entries, period, rate.as_ref(), Local::now().naive_local());
+                print_status(&entries, period, rate.as_ref(), now);
             }
         }
     }

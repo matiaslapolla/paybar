@@ -24,6 +24,9 @@ use crate::period::Period;
 const DIM: Style = Style::new().fg(Color::DarkGray);
 const PAID: Style = Style::new().fg(Color::Green);
 const OVERDUE: Style = Style::new().fg(Color::Red);
+/// One step below DIM, for the annotation: the totals it sits beside are
+/// exact, and it is derived, approximate and dated.
+const FAINT: Style = Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM);
 
 pub enum Mode {
     Normal,
@@ -112,10 +115,16 @@ pub struct App {
     pub quit: bool,
     /// Set when a prompt could not be parsed, cleared on the next keypress.
     pub error: Option<String>,
-    /// Resolved once at launch and on `r`, never inside the event loop: a
-    /// fetch is a blocking call, and a redraw is not the place for one.
+    /// Resolved at launch, on `r`, and once when a month first turns out to
+    /// need one — never on the idle tick, because a fetch blocks and a redraw
+    /// is not the place for one.
     pub rate: Option<Rate>,
-    pub rate_stale: bool,
+    /// The user pressed `r`. Named for the request, not for the rate: whether
+    /// the rate itself is stale is derived from its age.
+    pub refresh_requested: bool,
+    /// An attempt already failed. Only `r` retries, so stepping through months
+    /// offline cannot stall on every keypress.
+    pub rate_unavailable: bool,
 }
 
 impl App {
@@ -130,7 +139,8 @@ impl App {
             quit: false,
             error: None,
             rate: None,
-            rate_stale: false,
+            refresh_requested: false,
+            rate_unavailable: false,
         }
     }
 
@@ -245,7 +255,7 @@ impl App {
                 Some(Action::TogglePaid(self.selected()?.expense.id))
             }
             KeyCode::Char('r') => {
-                self.rate_stale = true;
+                self.refresh_requested = true;
                 None
             }
             KeyCode::Char('t') => Some(Action::ToggleArchive(self.selected()?.expense.id)),
@@ -360,17 +370,11 @@ fn ui(f: &mut Frame, app: &App) {
             DIM,
         ));
         if let (Some(rate), Some(primary)) = (app.rate.as_ref(), primary.as_deref())
-            && let Some(approx) =
-                fx::convert_cents(t.due_cents, &t.currency, primary, rate.rate_centavos)
+            && let Some(approx) = fx::approx_for(app.rate.as_ref(), t, Some(primary))
         {
             header.push(Span::styled(
-                format!(
-                    "  \u{2248} {} {} {}",
-                    primary,
-                    format_cents(approx),
-                    rate.label(Local::now().naive_local())
-                ),
-                DIM,
+                format!("  {}", rate.annotation(approx, primary, Local::now().naive_local())),
+                FAINT,
             ));
         }
     }
@@ -506,9 +510,26 @@ pub fn run() -> Result<()> {
                         app.error = Some(e.to_string());
                     }
                     refresh(&mut app, &conn)?;
-                    if app.rate_stale {
-                        app.rate = fx::for_entries(&conn, &app.entries, true).unwrap_or(None);
-                        app.rate_stale = false;
+                    // `r` retries whatever failed and says so; stepping into a
+                    // month that turns out to hold two currencies resolves once
+                    // and then gives up until asked again, so an offline
+                    // session cannot stall on every keypress.
+                    let stepped_into_a_mixed_month =
+                        period != app.period && app.rate.is_none() && !app.rate_unavailable;
+                    if app.refresh_requested || stepped_into_a_mixed_month {
+                        match fx::for_entries(&conn, &app.entries, app.refresh_requested) {
+                            Ok(rate) => {
+                                app.rate_unavailable = rate.is_none();
+                                if rate.is_some() {
+                                    app.rate = rate;
+                                }
+                            }
+                            Err(e) => {
+                                app.rate_unavailable = true;
+                                app.error = Some(e.to_string());
+                            }
+                        }
+                        app.refresh_requested = false;
                     }
                     last_tick = Instant::now();
                 }

@@ -356,34 +356,54 @@ Panel {
 
           // ---- totals, one row per currency -------------------------------
           //
-          // Never summed across currencies: paybar does no FX conversion, so a
-          // single blended figure would be a number that means nothing.
+          // Never summed across currencies. A total in another currency gets a
+          // subordinate line saying what it is worth and at which rate; that
+          // annotation decorates one total and never replaces the two above it.
 
           Repeater {
             model: Model.readList(paybar.snapshot.totals)
 
-            delegate: Item {
+            delegate: Column {
               required property var modelData
-              width: column.width
-              height: totalLabel.implicitHeight + Style.space(4)
+              readonly property string approx:
+                Model.approxLabel(modelData, paybar.fx, paybar.primaryCurrency)
 
-              Text {
-                id: totalLabel
-                anchors.left: parent.left
-                anchors.leftMargin: Style.space(6)
-                anchors.verticalCenter: parent.verticalCenter
-                text: modelData.currency
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+              width: column.width
+
+              Item {
+                width: parent.width
+                height: totalLabel.implicitHeight + Style.space(4)
+
+                Text {
+                  id: totalLabel
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.space(6)
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: modelData.currency
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                Text {
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.space(6)
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: Model.formatCents(modelData.paidCents) + " / " + Model.formatCents(modelData.dueCents)
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
               }
 
               Text {
-                anchors.right: parent.right
-                anchors.rightMargin: Style.space(6)
-                anchors.verticalCenter: parent.verticalCenter
-                text: Model.formatCents(modelData.paidCents) + " / " + Model.formatCents(modelData.dueCents)
-                color: root.foreground
+                width: parent.width - Style.space(12)
+                x: Style.space(6)
+                visible: approx !== ""
+                horizontalAlignment: Text.AlignRight
+                elide: Text.ElideLeft
+                text: approx
+                color: Qt.darker(root.dim, 1.2)
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
               }

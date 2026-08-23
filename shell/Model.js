@@ -10,6 +10,7 @@ function emptySnapshot() {
     pending: 0,
     overdue: 0,
     primaryCurrency: "",
+    fx: null,
     totals: [],
     items: []
   }
@@ -35,11 +36,14 @@ function parseSnapshot(raw) {
   snapshot.pending = Number(parsed.pending) || 0
   snapshot.overdue = Number(parsed.overdue) || 0
   snapshot.primaryCurrency = parsed.primaryCurrency ? String(parsed.primaryCurrency) : ""
+  snapshot.fx = parseFx(parsed.fx)
   snapshot.totals = readList(parsed.totals).map(function(t) {
     return {
       currency: String(t.currency || ""),
       dueCents: Number(t.dueCents) || 0,
-      paidCents: Number(t.paidCents) || 0
+      paidCents: Number(t.paidCents) || 0,
+      approxCents: t.approxCents === null || t.approxCents === undefined
+        ? null : Number(t.approxCents)
     }
   })
   snapshot.items = readList(parsed.items).map(function(i) {
@@ -55,6 +59,23 @@ function parseSnapshot(raw) {
     }
   })
   return { ok: true, snapshot: snapshot }
+}
+
+/// The rate behind `approxCents`, or null when the CLI had none to offer —
+/// disabled, offline with an empty cache, or a month in one currency.
+function parseFx(raw) {
+  if (!raw || typeof raw !== "object") return null
+  var rateCentavos = Number(raw.rateCentavos)
+  if (!isFinite(rateCentavos) || rateCentavos <= 0) return null
+  return {
+    casa: String(raw.casa || ""),
+    base: String(raw.base || ""),
+    quote: String(raw.quote || ""),
+    rateCentavos: rateCentavos,
+    fetchedAt: String(raw.fetchedAt || ""),
+    sourceUpdatedAt: raw.sourceUpdatedAt ? String(raw.sourceUpdatedAt) : "",
+    stale: raw.stale === true
+  }
 }
 
 // Array-like rather than Array: a value that travels through a QML `var`
@@ -124,4 +145,20 @@ function stepPeriod(period, delta) {
 function dayOf(dueDate) {
   var parts = String(dueDate || "").split("-")
   return parts.length === 3 ? parts[2] : ""
+}
+
+/// "@ blue 1,550.00" — the attribution that has to travel with every converted
+/// number. A rate that could not be refreshed says so rather than passing
+/// itself off as current.
+function rateLabel(fx) {
+  if (!fx) return ""
+  return "@ " + fx.casa + " " + formatCents(fx.rateCentavos) + (fx.stale ? " (stale)" : "")
+}
+
+/// What one total is worth in the primary currency, or "" when there is
+/// nothing to say. Never a blended figure: this annotates a single total, and
+/// the totals themselves stay grouped.
+function approxLabel(total, fx, primaryCurrency) {
+  if (!fx || !total || total.approxCents === null || total.approxCents === undefined) return ""
+  return "\u2248 " + primaryCurrency + " " + formatCents(total.approxCents) + " " + rateLabel(fx)
 }

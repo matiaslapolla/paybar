@@ -30,6 +30,9 @@ Item {
   readonly property int pending: snapshot.pending
   readonly property int overdue: snapshot.overdue
   readonly property string primaryCurrency: snapshot.primaryCurrency
+  /// The rate behind the totals' `approxCents`, or null when there is none.
+  /// Its absence is never an error state: the totals above it are still exact.
+  readonly property var fx: snapshot.fx
   readonly property int outstandingCents: Model.outstanding(snapshot, primaryCurrency)
   readonly property string periodLabel: Model.periodLabel(snapshot.period)
 

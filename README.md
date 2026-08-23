@@ -8,7 +8,7 @@ bar.
 
 Not a budgeting app. It tracks the charges whose amount and due day you already
 know — rent, the gym, three subscriptions — and refuses the rest: no variable
-spending, no income, no bank import, no exchange rates.
+spending, no income, no bank import, no budgets.
 
 ## Install
 
@@ -61,12 +61,39 @@ belongs to.
 ignored as digit grouping, and more than two decimals is an error rather than a
 silent rounding.
 
-**Currencies are grouped, never summed.** There is no exchange rate anywhere in
-this program, so ARS and USD are reported side by side and left that way.
+**Currencies are grouped, never summed.** ARS and USD are reported side by
+side and left that way. A rate may *annotate* a total — never merge two:
+
+```
+ARS 585,196.00 / 585,196.00 · 0 pending, 0 overdue
+USD   1,140.00 /   1,140.00 · 0 pending, 0 overdue
+    ≈ ARS 1,767,000.00 @ blue 1,550.00
+```
+
+The `≈` line is derived, approximate and dated, and says so: it always carries
+the casa and the rate, and admits its age once stale. The two lines above it
+stay exact. Nothing converted is ever written to the database.
+
+The rate comes from [dolarapi](https://dolarapi.com) — public and keyless —
+and refreshes lazily, when a surface asks for a month that holds both
+currencies and the cached rate has expired. Opening the TUI or the bar popup
+is what updates it; an all-ARS month never touches the network, and a failed
+fetch falls back to the last known rate rather than failing the command.
+
+| | | |
+|---|---|---|
+| `PAYBAR_FX` | `on` | `off` removes the annotation entirely |
+| `PAYBAR_FX_CASA` | `blue` | `oficial`, `blue`, `bolsa`, `contadoconliqui`, `cripto`, `mayorista`, `tarjeta` |
+| `PAYBAR_FX_TTL` | `3600` | seconds a fetched rate stays fresh |
+
+Which casa is a real choice, not a default worth ignoring: on 2026-08-23 they
+spanned 1520 to 1976. Card subscriptions clear near `tarjeta`; dollars you buy
+yourself, nearer `bolsa` or `cripto`. See
+[`docs/adr/002-fx-is-an-annotation.md`](docs/adr/002-fx-is-an-annotation.md).
 
 ### TUI keys
 
-`space`/`p` pay · `a` add · `e` edit · `t` archive · `x` delete · `h`/`l` month · `Tab` archived · `j`/`k` move · `q` quit
+`space`/`p` pay · `a` add · `e` edit · `t` archive · `x` delete · `h`/`l` month · `Tab` archived · `j`/`k` move · `r` refresh the rate · `q` quit
 
 Add and edit take one line — `<name> <amount> <day> [category]` — parsed from
 the end, so a name may contain spaces without quoting.

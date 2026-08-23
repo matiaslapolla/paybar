@@ -33,13 +33,27 @@ February resolves to the 28th/29th: the day is *clamped*, never rolled into the
 next month. An expense is never silently skipped.
 
 **Amount** — stored as an integer number of **cents**, never a float. Rendered
-with a currency code. Each expense carries its own `currency`; paybar does no
-FX conversion, so totals are always **grouped by currency**. Two currencies
-means two totals, never one blended number.
+with a currency code. Each expense carries its own `currency`, and totals are
+always **grouped by currency**. Two currencies means two totals, never one
+blended number — see [ADR 002](docs/adr/002-fx-is-an-annotation.md).
 
 **Primary currency** — the currency whose total the bar widget shows when
 space allows only one. Defaults to the currency of the largest number of
-active expenses.
+active expenses. It is also what an annotation converts *to*.
+
+**Casa** — which of the several simultaneous dollar prices a rate is read at:
+`oficial`, `blue`, `bolsa`, `contadoconliqui`, `cripto`, `mayorista`,
+`tarjeta`. They differ by tens of percent, so a converted figure is meaningless
+without the casa attached to it.
+
+**Rate** — the `venta` price of one unit of USD in ARS centavos, at one casa,
+read from dolarapi and cached with the time it was read. A rate is never
+applied to an expense or a payment; it exists to produce an **annotation**.
+
+**Annotation** — a derived, approximate, dated figure printed *next to* a
+total: what that total is worth in the primary currency. It is subordinate by
+construction — marked `≈`, always carrying its casa and rate, and admitting its
+age once stale. It decorates one total; it never merges two.
 
 ## Surfaces
 

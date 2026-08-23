@@ -69,7 +69,9 @@ the network. This is what makes "it updates when I open the widget" true
 without a daemon: the widget refreshes on popup open, the TUI on launch, and
 each refresh runs a command that fetches iff the cache went stale.
 
-**The network is never load-bearing.** Timeouts are 2.5 s connect and read. On
+**The network is never load-bearing.** One 2.5 s global timeout covers
+connect, send and receive together, so the worst case is bounded whatever
+stalls. On
 any failure — offline, DNS, 500, garbage body — the cached rate is used and
 marked `stale`. With no cached rate at all, the annotation is simply absent.
 A failed fetch never changes an exit code: `status --json` exits 0 with
@@ -90,11 +92,11 @@ annotation; there is nothing to say.
 ```
 ARS 585,196.00 / 585,196.00 · 0 pending, 0 overdue
 USD   1,140.00 /   1,140.00 · 0 pending, 0 overdue
-                              ≈ ARS 1,767,000.00 @ blue 1,550.00
+    ≈ ARS 1,767,000.00 @ blue 1,550.00
 ```
 
-The annotation is its own line, indented, dim, and attached to the total above
-it. A stale rate appends its age: `@ blue 1,550.00 (3h old)`.
+The annotation is its own line, indented, and attached to the total above it.
+A stale rate appends its age: `@ blue 1,550.00 (3h old)`.
 
 ### `ls --json` / `status --json`
 
@@ -122,15 +124,19 @@ a rule, and rules live in one place.
 
 ### TUI
 
-The header keeps one line per currency and appends `≈ ARS …` to non-primary
-ones. `r` forces a refresh that bypasses the TTL. No new keys.
+The header keeps one line per currency and appends `≈ ARS … @ casa rate` to
+non-primary ones. `r` forces a refresh that bypasses the TTL — the one key
+added, and the only place the TUI fetches other than launch, because a fetch
+blocks and the event loop must not.
 
 ### Widget
 
 No new settings and no new process spawns. It already calls `ls --all --json`
 on popup open; the annotation arrives in that payload and renders under the
-totals block, dim, right-aligned. A stale rate is not an error state — the bar
-never blanks over FX.
+totals block, dim, right-aligned. Age is rendered as `(stale)` rather than a
+duration: the plugin does not parse timestamps, and the distinction that
+matters at a glance is current versus not. A stale rate is not an error state —
+the bar never blanks over FX.
 
 ## Out of scope, deliberately
 

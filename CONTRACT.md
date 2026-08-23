@@ -11,7 +11,7 @@ here require updating both.
 - **Rust owns DDL/migrations** (via `PRAGMA user_version`). No other surface
   runs DDL; the QML plugin never opens the file at all.
 
-## Schema (user_version = 1)
+## Schema (user_version = 2)
 
 ```sql
 CREATE TABLE expenses (
@@ -36,6 +36,18 @@ CREATE TABLE payments (
 );
 
 CREATE INDEX idx_payments_period ON payments(period);
+
+-- v2. A cache, not a ledger: no converted amount is stored anywhere, and
+-- dropping this table returns paybar to its v1 behaviour exactly.
+CREATE TABLE fx_rates (
+  casa              TEXT NOT NULL,               -- dolarapi casa slug
+  base              TEXT NOT NULL,               -- "USD"
+  quote             TEXT NOT NULL,               -- "ARS"
+  rate_centavos     INTEGER NOT NULL,            -- centavos of quote per 1 base
+  fetched_at        TEXT NOT NULL,               -- "YYYY-MM-DDTHH:MM:SS" local
+  source_updated_at TEXT,                        -- passed through, never parsed
+  PRIMARY KEY (casa, base, quote)
+);
 ```
 
 ## Semantics
@@ -50,7 +62,12 @@ CREATE INDEX idx_payments_period ON payments(period);
   rather than inserting a second row.
 - Archived (`active = 0`) expenses are excluded from every period listing and
   from totals, but their past payments survive.
-- Totals are grouped by currency. paybar never converts between currencies.
+- Totals are grouped by currency and never summed. This is an invariant, not a
+  default: no surface prints a single total spanning currencies, and there is
+  no flag that makes one.
+- A rate may *annotate* a total — a subordinate figure saying what it is worth
+  in the primary currency — and must always be rendered with the casa and rate
+  that produced it. It never replaces a total and is never stored on one.
 
 ## CLI surface (`paybar`, built from `core/`)
 
@@ -70,6 +87,11 @@ paybar status [--period YYYY-MM]
   `12.99`). `_` and `,` are stripped as digit grouping. It is parsed to cents
   with exactly two decimal places; more precision is an error, not a rounding.
 - `--currency` defaults to `$PAYBAR_CURRENCY`, itself defaulting to `ARS`.
+- Conversion is configured by environment only: `PAYBAR_FX` (`off` disables),
+  `PAYBAR_FX_CASA` (one of `oficial`, `blue`, `bolsa`, `contadoconliqui`,
+  `cripto`, `mayorista`, `tarjeta`; default `blue`), `PAYBAR_FX_TTL` (seconds a
+  fetched rate stays fresh; default 3600). An unknown casa is an error; a
+  fetch that fails is not.
 - `--period` defaults to the current period everywhere.
 - `add` prints the created row id and the resolved due date.
 - `ls` defaults to `--pending`. Columns: `id`, mark (`x` paid, `!` overdue,
@@ -92,8 +114,18 @@ This is the only interface the QML plugin uses.
   "pending": 3,
   "overdue": 1,
   "primaryCurrency": "ARS",
+  "fx": {
+    "casa": "blue",
+    "base": "USD",
+    "quote": "ARS",
+    "rateCentavos": 155000,
+    "fetchedAt": "2026-08-23T18:04:11",
+    "sourceUpdatedAt": "2026-08-23T21:00:00.000Z",
+    "stale": false
+  },
   "totals": [
-    { "currency": "ARS", "dueCents": 12000000, "paidCents": 7500000 }
+    { "currency": "ARS", "dueCents": 12000000, "paidCents": 7500000,
+      "approxCents": null }
   ],
   "items": [
     {
@@ -111,6 +143,11 @@ This is the only interface the QML plugin uses.
 ```
 
 - `status --json` omits `items`; `ls --json` includes them.
+- `fx` is `null` — never absent — when conversion is disabled, when no rate is
+  available, and when the period does not need one. `approxCents` is the
+  total converted to `primaryCurrency`, and is `null` for the primary currency
+  itself and whenever `fx` is `null`. Surfaces render it; they never compute
+  it, so rounding has one implementation.
 - `status` is field-stable: keys are always present, even at zero.
 - Exit code is 0 with an empty `items` array when nothing matches; a non-zero
   exit means the command failed, never "nothing to show".
@@ -121,3 +158,10 @@ This is the only interface the QML plugin uses.
   `paybar status --json` on a configurable interval (default 60 s), on popup
   open, and after any mutation it triggers itself.
 - The TUI re-queries on every user action.
+- A rate refreshes as a side effect of those reads: a command that needs one
+  fetches iff the cached copy aged past `PAYBAR_FX_TTL`. There is no daemon and
+  no separate schedule. The TUI resolves at launch and on `r`, never inside its
+  event loop, because a fetch blocks and a redraw must not.
+- A fetch never changes an exit code. On failure the cached rate is served with
+  `"stale": true`; with no cached rate, `fx` is `null`. Non-zero still means
+  the command failed, never "no rate".

@@ -13,6 +13,7 @@ use ratatui::{
 use rusqlite::Connection;
 
 use crate::db::{self, ActiveChange, CategoryChange, Edit, Entry, Status, View};
+use crate::fx::{self, Rate};
 use crate::money::{format_cents, parse_cents};
 use crate::period::Period;
 
@@ -111,6 +112,10 @@ pub struct App {
     pub quit: bool,
     /// Set when a prompt could not be parsed, cleared on the next keypress.
     pub error: Option<String>,
+    /// Resolved once at launch and on `r`, never inside the event loop: a
+    /// fetch is a blocking call, and a redraw is not the place for one.
+    pub rate: Option<Rate>,
+    pub rate_stale: bool,
 }
 
 impl App {
@@ -124,6 +129,8 @@ impl App {
             mode: Mode::Normal,
             quit: false,
             error: None,
+            rate: None,
+            rate_stale: false,
         }
     }
 
@@ -237,6 +244,10 @@ impl App {
             KeyCode::Char(' ') | KeyCode::Char('p') => {
                 Some(Action::TogglePaid(self.selected()?.expense.id))
             }
+            KeyCode::Char('r') => {
+                self.rate_stale = true;
+                None
+            }
             KeyCode::Char('t') => Some(Action::ToggleArchive(self.selected()?.expense.id)),
             KeyCode::Char('x') => {
                 self.mode = Mode::Confirm(self.selected()?.expense.id);
@@ -336,6 +347,7 @@ fn ui(f: &mut Frame, app: &App) {
     // ---- header: period, then one total per currency -----------------------
     let totals = db::totals(&app.entries);
     let pending = app.entries.iter().filter(|e| e.status != Status::Paid).count();
+    let primary = db::primary_currency(&app.entries);
     let mut header = vec![Span::raw(format!(" {}", app.period.label()))];
     for t in &totals {
         header.push(Span::styled(
@@ -347,6 +359,20 @@ fn ui(f: &mut Frame, app: &App) {
             ),
             DIM,
         ));
+        if let (Some(rate), Some(primary)) = (app.rate.as_ref(), primary.as_deref())
+            && let Some(approx) =
+                fx::convert_cents(t.due_cents, &t.currency, primary, rate.rate_centavos)
+        {
+            header.push(Span::styled(
+                format!(
+                    "  \u{2248} {} {} {}",
+                    primary,
+                    format_cents(approx),
+                    rate.label(Local::now().naive_local())
+                ),
+                DIM,
+            ));
+        }
     }
     header.push(Span::styled(
         format!("    {pending} pending"),
@@ -449,7 +475,7 @@ fn ui(f: &mut Frame, app: &App) {
             Line::from(vec![
                 Span::styled(bar, DIM),
                 Span::styled(
-                    "space pay \u{00b7} a add \u{00b7} e edit \u{00b7} t archive \u{00b7} x delete \u{00b7} h/l month \u{00b7} tab archived \u{00b7} q quit",
+                    "space pay \u{00b7} a add \u{00b7} e edit \u{00b7} t archive \u{00b7} x delete \u{00b7} h/l month \u{00b7} tab archived \u{00b7} r rate \u{00b7} q quit",
                     DIM,
                 ),
             ])
@@ -462,6 +488,7 @@ pub fn run() -> Result<()> {
     let mut conn = db::open()?;
     let mut app = App::new(Local::now().date_naive());
     refresh(&mut app, &conn)?;
+    app.rate = fx::for_entries(&conn, &app.entries, false)?;
 
     let mut terminal = ratatui::init();
     let result = (|| -> Result<()> {
@@ -479,6 +506,10 @@ pub fn run() -> Result<()> {
                         app.error = Some(e.to_string());
                     }
                     refresh(&mut app, &conn)?;
+                    if app.rate_stale {
+                        app.rate = fx::for_entries(&conn, &app.entries, true).unwrap_or(None);
+                        app.rate_stale = false;
+                    }
                     last_tick = Instant::now();
                 }
             } else if last_tick.elapsed() >= Duration::from_secs(2) {

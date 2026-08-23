@@ -1,4 +1,5 @@
 mod db;
+mod fx;
 mod money;
 mod output;
 mod period;
@@ -32,7 +33,13 @@ Examples:
   paybar status --json                       what the bar widget reads
 
 Amounts use `.` as the decimal separator; `,` and `_` are ignored as grouping.
-Currency defaults to $PAYBAR_CURRENCY, itself defaulting to ARS.";
+Currency defaults to $PAYBAR_CURRENCY, itself defaulting to ARS.
+
+Totals stay grouped by currency. When a month holds both USD and ARS, the
+non-primary total is annotated with what it is worth at a quoted rate:
+  PAYBAR_FX=off       turn the annotation off entirely
+  PAYBAR_FX_CASA      oficial|blue|bolsa|contadoconliqui|cripto|mayorista|tarjeta (blue)
+  PAYBAR_FX_TTL       seconds a fetched rate stays fresh (3600)";
 
 #[derive(Parser)]
 #[command(name = "paybar", about = "fixed monthly expenses", after_help = EXAMPLES)]
@@ -161,8 +168,11 @@ fn main() -> Result<()> {
             };
             let entries = db::period_view(&conn, period, today, &view)?;
             if as_json {
-                println!("{}", json(&entries, period, today, true));
+                let rate = fx::for_entries(&conn, &entries, false)?;
+                println!("{}", json(&entries, period, today, true, rate.as_ref()));
             } else {
+                // The table has no totals line, so there is nothing to annotate
+                // and no reason to reach for the network.
                 print_entries(&entries);
             }
         }
@@ -217,10 +227,11 @@ fn main() -> Result<()> {
         Cmd::Status { period, json: as_json } => {
             let period = resolve_period(period)?;
             let entries = db::period_view(&conn, period, today, &View::all())?;
+            let rate = fx::for_entries(&conn, &entries, false)?;
             if as_json {
-                println!("{}", json(&entries, period, today, false));
+                println!("{}", json(&entries, period, today, false, rate.as_ref()));
             } else {
-                print_status(&entries, period);
+                print_status(&entries, period, rate.as_ref(), Local::now().naive_local());
             }
         }
     }

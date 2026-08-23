@@ -130,7 +130,26 @@ fn migrate(conn: &Connection) -> Result<()> {
         )?;
         version = 1;
     }
-    debug_assert_eq!(version, 1);
+    if version == 1 {
+        // A cache, not a ledger. Nothing converted is stored anywhere; dropping
+        // this table returns paybar to its pre-FX behaviour exactly.
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE fx_rates (
+               casa              TEXT NOT NULL,
+               base              TEXT NOT NULL,
+               quote             TEXT NOT NULL,
+               rate_centavos     INTEGER NOT NULL,
+               fetched_at        TEXT NOT NULL,
+               source_updated_at TEXT,
+               PRIMARY KEY (casa, base, quote)
+             );
+             PRAGMA user_version = 2;
+             COMMIT;",
+        )?;
+        version = 2;
+    }
+    debug_assert_eq!(version, 2);
     Ok(())
 }
 
@@ -423,7 +442,7 @@ mod tests {
     fn migration_sets_user_version_and_schema() {
         let (_dir, conn) = temp_db();
         let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 1);
+        assert_eq!(v, 2);
         let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
         assert_eq!(mode.to_lowercase(), "wal");
     }
@@ -435,7 +454,7 @@ mod tests {
         drop(open_at(&path).unwrap());
         let conn = open_at(&path).unwrap();
         let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 1);
+        assert_eq!(v, 2);
     }
 
     #[test]
